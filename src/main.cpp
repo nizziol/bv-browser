@@ -1,1200 +1,359 @@
+// main.cpp
+//
+// Szkielet wlasnej przegladarki na bazie CEF (Chromium Embedded Framework).
+// Architektura: jedno okno Win32, w srodku DWA osadzone browsery CEF:
+//   - "toolbar"  -> gorny pasek (glassmorphism, wlasny HTML/CSS/JS)
+//   - "content"  -> reszta okna, tam wyswietlaja sie prawdziwe strony www
+//
+// Pasek komunikuje sie z C++ przez window.cefQuery (CefMessageRouter),
+// wysylajac proste komunikaty tekstowe: "action:back", "action:forward",
+// "action:reload", "action:stop", "navigate:<url-lub-fraza>".
+//
+// UWAGA: to jest SZKIELET do dalszej rozbudowy, nie testowalem kompilacji
+// w tym srodowisku (brak tu binarek CEF i dostepu do sieci) - kod pisany
+// scisle wg publicznego API CEF (include/cef_*.h, include/wrapper/*).
+// Wymagania do zbudowania opisane w README.md.
+
+// NOMINMAX musi byc zdefiniowany PRZED windows.h - inaczej makra min/max
+// z Windows.h psuja kazde wywolanie std::numeric_limits<T>::max() w
+// naglowkach CEF (objawia sie dziwnymi bledami skladni w cef_ref_counted.h
+// i cef_types_wrappers.h).
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+
+#include <memory>
+#include <string>
+
 #include "include/cef_app.h"
 #include "include/cef_browser.h"
 #include "include/cef_client.h"
-#include "include/cef_life_span_handler.h"
-#include "include/cef_display_handler.h"
-
-#include <windows.h>
-#include <dwmapi.h>
-#include <string>
-
-#pragma comment(lib, "dwmapi.lib")
-
-HWND g_main_window = nullptr;
-HWND g_address_bar = nullptr;
-
-CefRefPtr<CefBrowser> g_browser;
-
-WNDPROC g_old_address_proc = nullptr;
-
-bool g_preserve_search_text = false;
-std::wstring g_last_search_text;
-
-const COLORREF NIZZ_COLOR_BACKGROUND = RGB(250, 250, 250);
-const COLORREF NIZZ_COLOR_GLASS = RGB(245, 247, 250);
-const COLORREF NIZZ_COLOR_GLASS_BORDER = RGB(225, 228, 233);
-const COLORREF NIZZ_COLOR_TEXT = RGB(35, 38, 43);
-const COLORREF NIZZ_COLOR_ICON = RGB(70, 75, 82);
-
-#define ID_ADDRESS 1004
-
-
-// ============================================================
-// NAWIGACJA
-// ============================================================
-
-void NavigateFromAddressBar()
-{
-    if (!g_browser || !g_address_bar)
-        return;
-
-    wchar_t buffer[2048];
-
-    GetWindowTextW(
-        g_address_bar,
-        buffer,
-        2048
-    );
-
-    std::wstring address = buffer;
-
-    while (!address.empty() && address.front() == L' ')
-        address.erase(address.begin());
-
-    while (!address.empty() && address.back() == L' ')
-        address.pop_back();
-
-    if (address.empty())
-        return;
-
-
-    // --------------------------------------------------------
-    // NORMALNY URL
-    // --------------------------------------------------------
-
-    if (address.find(L"://") != std::wstring::npos)
-    {
-        g_preserve_search_text = false;
-
-        g_browser
-            ->GetMainFrame()
-            ->LoadURL(address);
-
-        return;
-    }
-
-
-    // --------------------------------------------------------
-    // np. youtube.com
-    // --------------------------------------------------------
-
-    if (
-        address.find(L".") != std::wstring::npos &&
-        address.find(L" ") == std::wstring::npos
-        )
-    {
-        std::wstring url =
-            L"https://" + address;
-
-        g_preserve_search_text = false;
-
-        g_browser
-            ->GetMainFrame()
-            ->LoadURL(url);
-
-        return;
-    }
-
-
-    // --------------------------------------------------------
-    // WYSZUKIWANIE GOOGLE
-    // --------------------------------------------------------
-
-    g_last_search_text = address;
-    g_preserve_search_text = true;
-
-    std::wstring search =
-        L"https://www.google.com/search?q=";
-
-    for (wchar_t c : address)
-    {
-        if (c == L' ')
-        {
-            search += L"+";
-        }
-        else
-        {
-            search += c;
-        }
-    }
-
-    g_browser
-        ->GetMainFrame()
-        ->LoadURL(search);
-}
-
-
-// ============================================================
-// ADDRESS BAR
-// ============================================================
-
-LRESULT CALLBACK AddressBarProc(
-    HWND hwnd,
-    UINT msg,
-    WPARAM wParam,
-    LPARAM lParam)
-{
-    switch (msg)
-    {
-    case WM_GETDLGCODE:
-
-        return DLGC_WANTALLKEYS |
-            DLGC_WANTCHARS;
-
-
-    case WM_KEYDOWN:
-
-        if (wParam == VK_RETURN)
-        {
-            NavigateFromAddressBar();
-
-            // Bardzo wa¿ne:
-            // nie pozwala Windowsowi obs³u¿yæ Entera
-            // i wydaæ systemowego "beep".
-
-            return 0;
-        }
-
-        break;
-
-
-    case WM_CHAR:
-
-        if (wParam == VK_RETURN)
-        {
-            // Druga warstwa zabezpieczenia
-            // przed dŸwiêkiem Windows.
-
-            return 0;
-        }
-
-        break;
-    }
-
-    return CallWindowProcW(
-        g_old_address_proc,
-        hwnd,
-        msg,
-        wParam,
-        lParam
-    );
-}
-
-
-// ============================================================
-// CEF HANDLER
-// ============================================================
-
-class NizzHandler :
-    public CefClient,
-    public CefLifeSpanHandler,
-    public CefDisplayHandler
-{
-public:
-
-    // --------------------------------------------------------
-    // LIFE SPAN
-    // --------------------------------------------------------
-
-    CefRefPtr<CefLifeSpanHandler>
-        GetLifeSpanHandler() override
-    {
-        return this;
-    }
-
-
-    // --------------------------------------------------------
-    // DISPLAY
-    // --------------------------------------------------------
-
-    CefRefPtr<CefDisplayHandler>
-        GetDisplayHandler() override
-    {
-        return this;
-    }
-
-
-    // --------------------------------------------------------
-    // BROWSER CREATED
-    // --------------------------------------------------------
-
-    void OnAfterCreated(
-        CefRefPtr<CefBrowser> browser) override
-    {
-        g_browser = browser;
-    }
-
-
-    // --------------------------------------------------------
-    // BROWSER CLOSED
-    // --------------------------------------------------------
-
-    void OnBeforeClose(
-        CefRefPtr<CefBrowser> browser) override
-    {
-        g_browser = nullptr;
-    }
-
-
-    // --------------------------------------------------------
-    // ZMIANA ADRESU
-    // --------------------------------------------------------
-
-    void OnAddressChange(
-        CefRefPtr<CefBrowser> browser,
-        CefRefPtr<CefFrame> frame,
-        const CefString& url) override
-    {
-        if (!frame->IsMain())
-            return;
-
-        std::string url_utf8 = url.ToString();
-
-        std::wstring wide_url(
-            url_utf8.begin(),
-            url_utf8.end()
-        );
-
-
-        // ----------------------------------------------------
-        // JEŒLI TO WYNIK WYSZUKIWANIA GOOGLE
-        // ZOSTAWIAMY TO, CO U¯YTKOWNIK WPISA£
-        // ----------------------------------------------------
-
-        if (
-            g_preserve_search_text &&
-            wide_url.find(
-                L"https://www.google.com/search?"
-            ) == 0
-            )
-        {
-            SetWindowTextW(
-                g_address_bar,
-                g_last_search_text.c_str()
-            );
-
-            return;
-        }
-
-
-        // ----------------------------------------------------
-        // NORMALNA STRONA
-        // POKAZUJEMY PRAWDZIWY URL
-        // ----------------------------------------------------
-
-        g_preserve_search_text = false;
-
-        SetWindowTextW(
-            g_address_bar,
-            wide_url.c_str()
-        );
-    }
-
-
-private:
-
-    IMPLEMENT_REFCOUNTING(NizzHandler);
+#include "include/cef_render_process_handler.h"
+#include "include/wrapper/cef_message_router.h"
+
+#if defined(CEF_USE_SANDBOX)
+#include "include/cef_sandbox_win.h"
+#pragma comment(lib, "cef_sandbox.lib")
+#endif
+
+namespace {
+
+constexpr int kToolbarHeight = 64;  // wysokosc paska w pikselach
+
+CefRefPtr<CefBrowser> g_content_browser;
+CefRefPtr<CefBrowser> g_toolbar_browser;
+HWND g_main_hwnd = nullptr;
+
+// ---------------------------------------------------------------------
+// CefApp - proces glowny ORAZ proces renderera (to samo .exe jest
+// uruchamiane ponownie przez CEF dla kazdego typu podprocesu, z inna
+// rola). GetBrowserProcessHandler() dziala w procesie glownym,
+// GetRenderProcessHandler() w procesie renderera.
+//
+// WAZNE: window.cefQuery w toolbar.html dziala TYLKO jesli po stronie
+// renderera istnieje CefMessageRouterRendererSide - bez tego JS nigdy
+// nie zobaczy funkcji cefQuery (przyciski/enter "nic nie robia").
+// ---------------------------------------------------------------------
+class GlassApp : public CefApp,
+                  public CefBrowserProcessHandler,
+                  public CefRenderProcessHandler {
+ public:
+  GlassApp() = default;
+
+  CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override {
+    return this;
+  }
+  CefRefPtr<CefRenderProcessHandler> GetRenderProcessHandler() override {
+    return this;
+  }
+
+  // --- CefRenderProcessHandler ---
+  void OnWebKitInitialized() override {
+    CefMessageRouterConfig config;
+    renderer_router_ = CefMessageRouterRendererSide::Create(config);
+  }
+
+  void OnContextCreated(CefRefPtr<CefBrowser> browser,
+                         CefRefPtr<CefFrame> frame,
+                         CefRefPtr<CefV8Context> context) override {
+    if (renderer_router_) renderer_router_->OnContextCreated(browser, frame, context);
+  }
+
+  void OnContextReleased(CefRefPtr<CefBrowser> browser,
+                          CefRefPtr<CefFrame> frame,
+                          CefRefPtr<CefV8Context> context) override {
+    if (renderer_router_) renderer_router_->OnContextReleased(browser, frame, context);
+  }
+
+  bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
+                                 CefRefPtr<CefFrame> frame,
+                                 CefProcessId source_process,
+                                 CefRefPtr<CefProcessMessage> message) override {
+    return renderer_router_ &&
+           renderer_router_->OnProcessMessageReceived(browser, frame,
+                                                       source_process, message);
+  }
+
+ private:
+  CefRefPtr<CefMessageRouterRendererSide> renderer_router_;
+
+  IMPLEMENT_REFCOUNTING(GlassApp);
 };
 
-
-// ============================================================
-// CEF APP
-// ============================================================
-
-class NizzApp :
-    public CefApp,
-    public CefBrowserProcessHandler
-{
-public:
-
-    CefRefPtr<CefBrowserProcessHandler>
-        GetBrowserProcessHandler() override
-    {
-        return this;
+// ---------------------------------------------------------------------
+// Handler zapytan JS -> C++ z paska (window.cefQuery w toolbar.html).
+// ---------------------------------------------------------------------
+class ToolbarQueryHandler : public CefMessageRouterBrowserSide::Handler {
+ public:
+  bool OnQuery(CefRefPtr<CefBrowser> browser,
+               CefRefPtr<CefFrame> frame,
+               int64_t query_id,
+               const CefString& request,
+               bool persistent,
+               CefRefPtr<Callback> callback) override {
+    if (!g_content_browser) {
+      callback->Failure(0, "content browser jeszcze nie gotowy");
+      return true;
     }
 
+    const std::string req = request.ToString();
 
-    void OnContextInitialized() override
-    {
-        CefWindowInfo window_info;
+    if (req == "action:back") {
+      if (g_content_browser->CanGoBack()) g_content_browser->GoBack();
+    } else if (req == "action:forward") {
+      if (g_content_browser->CanGoForward()) g_content_browser->GoForward();
+    } else if (req == "action:reload") {
+      g_content_browser->Reload();
+    } else if (req == "action:stop") {
+      g_content_browser->StopLoad();
+    } else if (req.rfind("navigate:", 0) == 0) {
+      std::string target = req.substr(9);
 
-        RECT rect;
+      // Bardzo prosta heurystyka: jesli to nie wyglada na adres,
+      // traktujemy to jako fraze wyszukiwania.
+      const bool looks_like_url = target.find('.') != std::string::npos ||
+                                   target.find("://") != std::string::npos ||
+                                   target.rfind("localhost", 0) == 0;
 
-        GetClientRect(
-            g_main_window,
-            &rect
-        );
+      if (!looks_like_url) {
+        target = "https://www.google.com/search?q=" + target;
+      } else if (target.find("://") == std::string::npos) {
+        target = "https://" + target;
+      }
 
-        int width =
-            rect.right - rect.left;
-
-        int height =
-            rect.bottom - rect.top;
-
-
-        CefRect browser_rect(
-            0,
-            82,
-            width,
-            height - 82
-        );
-
-
-        window_info.SetAsChild(
-            g_main_window,
-            browser_rect
-        );
-
-
-        CefBrowserSettings browser_settings;
-
-        CefRefPtr<NizzHandler> handler =
-            new NizzHandler();
-
-
-        CefBrowserHost::CreateBrowser(
-            window_info,
-            handler,
-            "https://www.google.com",
-            browser_settings,
-            nullptr,
-            nullptr
-        );
+      g_content_browser->GetMainFrame()->LoadURL(target);
     }
 
+    callback->Success("ok");
+    return true;
+  }
 
-private:
-
-    IMPLEMENT_REFCOUNTING(NizzApp);
+  // UWAGA: CefMessageRouterBrowserSide::Handler NIE dziedziczy z
+  // CefBaseRefCounted - to zwykla klasa, ktora AddHandler() trzyma jako
+  // surowy wskaznik (nie CefRefPtr). Nie uzywamy tu IMPLEMENT_REFCOUNTING;
+  // zywotnoscia obiektu zarzadza GlassClient (patrz jego konstruktor).
 };
 
+// ---------------------------------------------------------------------
+// CefClient wspolny dla obu browserow (rozroznia je flaga is_toolbar_).
+// ---------------------------------------------------------------------
+class GlassClient : public CefClient,
+                     public CefLifeSpanHandler,
+                     public CefDisplayHandler {
+ public:
+  explicit GlassClient(bool is_toolbar) : is_toolbar_(is_toolbar) {
+    if (is_toolbar_) {
+      query_handler_ = std::make_unique<ToolbarQueryHandler>();
+      CefMessageRouterConfig config;
+      message_router_ = CefMessageRouterBrowserSide::Create(config);
+      message_router_->AddHandler(query_handler_.get(), false);
+    }
+  }
 
-// ============================================================
-// GLASS
-// ============================================================
+  CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
+  CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
 
-void DrawGlass(
-    HDC hdc,
-    RECT rect,
-    int radius)
-{
-    HBRUSH brush =
-        CreateSolidBrush(
-            NIZZ_COLOR_GLASS
-        );
+  bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
+                                 CefRefPtr<CefFrame> frame,
+                                 CefProcessId source_process,
+                                 CefRefPtr<CefProcessMessage> message) override {
+    if (message_router_ && message_router_->OnProcessMessageReceived(
+                               browser, frame, source_process, message)) {
+      return true;
+    }
+    return false;
+  }
 
-    HPEN pen =
-        CreatePen(
-            PS_SOLID,
-            1,
-            NIZZ_COLOR_GLASS_BORDER
-        );
+  void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
+    if (is_toolbar_) {
+      g_toolbar_browser = browser;
+    } else {
+      g_content_browser = browser;
+    }
+  }
 
+  void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
+    if (is_toolbar_) {
+      g_toolbar_browser = nullptr;
+    } else {
+      g_content_browser = nullptr;
+      // Uzywamy CefQuitMessageLoop(), NIE surowego PostQuitMessage(0) -
+      // CefRunMessageLoop() ma wlasna petle komunikatow i to jest
+      // oficjalny, udokumentowany sposob jej zatrzymania. To byl powod,
+      // dla ktorego X na oknie nic nie robil.
+      CefQuitMessageLoop();
+    }
+  }
 
-    HGDIOBJ old_brush =
-        SelectObject(
-            hdc,
-            brush
-        );
+  bool DoClose(CefRefPtr<CefBrowser> browser) override { return false; }
 
-    HGDIOBJ old_pen =
-        SelectObject(
-            hdc,
-            pen
-        );
+ private:
+  bool is_toolbar_;
+  CefRefPtr<CefMessageRouterBrowserSide> message_router_;
+  std::unique_ptr<ToolbarQueryHandler> query_handler_;
 
+  IMPLEMENT_REFCOUNTING(GlassClient);
+};
 
-    RoundRect(
-        hdc,
-        rect.left,
-        rect.top,
-        rect.right,
-        rect.bottom,
-        radius,
-        radius
-    );
+// ---------------------------------------------------------------------
+// Win32: okno-hosta + rozmieszczanie dwoch dzieci-browserow.
+// ---------------------------------------------------------------------
+void ResizeBrowsers(HWND hwnd) {
+  RECT rect;
+  GetClientRect(hwnd, &rect);
+  const int width = rect.right - rect.left;
+  const int height = rect.bottom - rect.top;
 
-
-    SelectObject(
-        hdc,
-        old_brush
-    );
-
-    SelectObject(
-        hdc,
-        old_pen
-    );
-
-
-    DeleteObject(brush);
-    DeleteObject(pen);
+  if (g_toolbar_browser) {
+    HWND toolbar_hwnd = g_toolbar_browser->GetHost()->GetWindowHandle();
+    SetWindowPos(toolbar_hwnd, nullptr, 0, 0, width, kToolbarHeight,
+                 SWP_NOZORDER);
+  }
+  if (g_content_browser) {
+    HWND content_hwnd = g_content_browser->GetHost()->GetWindowHandle();
+    SetWindowPos(content_hwnd, nullptr, 0, kToolbarHeight, width,
+                 height - kToolbarHeight, SWP_NOZORDER);
+  }
 }
 
-
-// ============================================================
-// WINDOW PROC
-// ============================================================
-
-LRESULT CALLBACK WindowProc(
-    HWND hwnd,
-    UINT msg,
-    WPARAM wParam,
-    LPARAM lParam)
-{
-    switch (msg)
-    {
-        // ========================================================
-        // CREATE
-        // ========================================================
-
-    case WM_CREATE:
-    {
-        DWM_WINDOW_CORNER_PREFERENCE corner =
-            DWMWCP_ROUND;
-
-
-        DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_WINDOW_CORNER_PREFERENCE,
-            &corner,
-            sizeof(corner)
-        );
-
-
-        // ----------------------------------------------------
-        // ADDRESS BAR
-        // ----------------------------------------------------
-
-        g_address_bar =
-            CreateWindowExW(
-                0,
-                L"EDIT",
-                L"",
-                WS_CHILD |
-                WS_VISIBLE |
-                ES_AUTOHSCROLL,
-                215,
-                25,
-                900,
-                34,
-                hwnd,
-                (HMENU)ID_ADDRESS,
-                GetModuleHandle(nullptr),
-                nullptr
-            );
-
-
-        // ----------------------------------------------------
-        // FONT
-        // ----------------------------------------------------
-
-        HFONT font =
-            CreateFontW(
-                15,
-                0,
-                0,
-                0,
-                FW_NORMAL,
-                FALSE,
-                FALSE,
-                FALSE,
-                DEFAULT_CHARSET,
-                OUT_DEFAULT_PRECIS,
-                CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY,
-                DEFAULT_PITCH |
-                FF_SWISS,
-                L"Segoe UI"
-            );
-
-
-        SendMessageW(
-            g_address_bar,
-            WM_SETFONT,
-            (WPARAM)font,
-            TRUE
-        );
-
-
-        // ----------------------------------------------------
-        // USUWAMY STANDARDOW¥ RAMKÊ
-        // ----------------------------------------------------
-
-        LONG style =
-            GetWindowLong(
-                g_address_bar,
-                GWL_STYLE
-            );
-
-
-        style &= ~WS_BORDER;
-
-
-        SetWindowLong(
-            g_address_bar,
-            GWL_STYLE,
-            style
-        );
-
-
-        // ----------------------------------------------------
-        // SUBCLASS
-        // ----------------------------------------------------
-
-        g_old_address_proc =
-            (WNDPROC)SetWindowLongPtrW(
-                g_address_bar,
-                GWLP_WNDPROC,
-                (LONG_PTR)AddressBarProc
-            );
-
-
-        return 0;
-    }
-
-
-    // ========================================================
-    // PAINT
-    // ========================================================
-
-    case WM_PAINT:
-    {
-        PAINTSTRUCT ps;
-
-        HDC hdc =
-            BeginPaint(
-                hwnd,
-                &ps
-            );
-
-
-        RECT client;
-
-        GetClientRect(
-            hwnd,
-            &client
-        );
-
-
-        // ----------------------------------------------------
-        // BACKGROUND
-        // ----------------------------------------------------
-
-        HBRUSH background =
-            CreateSolidBrush(
-                NIZZ_COLOR_BACKGROUND
-            );
-
-
-        FillRect(
-            hdc,
-            &client,
-            background
-        );
-
-
-        DeleteObject(background);
-
-
-        // ----------------------------------------------------
-        // G£ÓWNY TOOLBAR
-        // ----------------------------------------------------
-
-        RECT toolbar = {
-            12,
-            10,
-            client.right - 12,
-            72
-        };
-
-
-        DrawGlass(
-            hdc,
-            toolbar,
-            25
-        );
-
-
-        // ----------------------------------------------------
-        // BACK + FORWARD
-        // ----------------------------------------------------
-
-        RECT navigation = {
-            24,
-            21,
-            124,
-            61
-        };
-
-
-        DrawGlass(
-            hdc,
-            navigation,
-            22
-        );
-
-
-        // ----------------------------------------------------
-        // RELOAD
-        // ----------------------------------------------------
-
-        RECT reload = {
-            134,
-            21,
-            178,
-            61
-        };
-
-
-        DrawGlass(
-            hdc,
-            reload,
-            22
-        );
-
-
-        // ----------------------------------------------------
-        // ADDRESS BAR GLASS
-        // ----------------------------------------------------
-
-        RECT address = {
-            192,
-            21,
-            client.right - 24,
-            61
-        };
-
-
-        DrawGlass(
-            hdc,
-            address,
-            22
-        );
-
-
-        // ----------------------------------------------------
-        // IKONY
-        // ----------------------------------------------------
-
-        HFONT icon_font =
-            CreateFontW(
-                17,
-                0,
-                0,
-                0,
-                FW_NORMAL,
-                FALSE,
-                FALSE,
-                FALSE,
-                DEFAULT_CHARSET,
-                OUT_DEFAULT_PRECIS,
-                CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY,
-                DEFAULT_PITCH |
-                FF_SWISS,
-                L"Segoe UI"
-            );
-
-
-        HFONT old_font =
-            (HFONT)SelectObject(
-                hdc,
-                icon_font
-            );
-
-
-        SetBkMode(
-            hdc,
-            TRANSPARENT
-        );
-
-
-        SetTextColor(
-            hdc,
-            NIZZ_COLOR_ICON
-        );
-
-
-        // ----------------------------------------------------
-        // BACK
-        // ----------------------------------------------------
-
-        RECT back = {
-            29,
-            21,
-            74,
-            61
-        };
-
-
-        DrawTextW(
-            hdc,
-            L"\x2190",
-            -1,
-            &back,
-            DT_CENTER |
-            DT_VCENTER |
-            DT_SINGLELINE
-        );
-
-
-        // ----------------------------------------------------
-        // FORWARD
-        // ----------------------------------------------------
-
-        RECT forward = {
-            74,
-            21,
-            119,
-            61
-        };
-
-
-        DrawTextW(
-            hdc,
-            L"\x2192",
-            -1,
-            &forward,
-            DT_CENTER |
-            DT_VCENTER |
-            DT_SINGLELINE
-        );
-
-
-        // ----------------------------------------------------
-        // RELOAD
-        // ----------------------------------------------------
-
-        RECT reload_text = {
-            134,
-            21,
-            178,
-            61
-        };
-
-
-        DrawTextW(
-            hdc,
-            L"\x21BB",
-            -1,
-            &reload_text,
-            DT_CENTER |
-            DT_VCENTER |
-            DT_SINGLELINE
-        );
-
-
-        // ----------------------------------------------------
-        // TYTU£
-        // ----------------------------------------------------
-
-        HFONT title_font =
-            CreateFontW(
-                14,
-                0,
-                0,
-                0,
-                FW_SEMIBOLD,
-                FALSE,
-                FALSE,
-                FALSE,
-                DEFAULT_CHARSET,
-                OUT_DEFAULT_PRECIS,
-                CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY,
-                DEFAULT_PITCH |
-                FF_SWISS,
-                L"Segoe UI"
-            );
-
-
-        SelectObject(
-            hdc,
-            title_font
-        );
-
-
-        SetTextColor(
-            hdc,
-            NIZZ_COLOR_TEXT
-        );
-
-
-        RECT title = {
-            18,
-            78,
-            200,
-            105
-        };
-
-
-        DrawTextW(
-            hdc,
-            L"Nizz Browser",
-            -1,
-            &title,
-            DT_LEFT |
-            DT_VCENTER |
-            DT_SINGLELINE
-        );
-
-
-        SelectObject(
-            hdc,
-            old_font
-        );
-
-
-        DeleteObject(icon_font);
-        DeleteObject(title_font);
-
-
-        EndPaint(
-            hwnd,
-            &ps
-        );
-
-
-        return 0;
-    }
-
-
-    // ========================================================
-    // MOUSE
-    // ========================================================
-
-    case WM_LBUTTONUP:
-    {
-        int x =
-            LOWORD(lParam);
-
-        int y =
-            HIWORD(lParam);
-
-
-        // ----------------------------------------------------
-        // BACK
-        // ----------------------------------------------------
-
-        if (
-            x >= 24 &&
-            x <= 74 &&
-            y >= 21 &&
-            y <= 61)
-        {
-            if (
-                g_browser &&
-                g_browser->CanGoBack())
-            {
-                g_browser->GoBack();
-            }
-
-            return 0;
-        }
-
-
-        // ----------------------------------------------------
-        // FORWARD
-        // ----------------------------------------------------
-
-        if (
-            x >= 74 &&
-            x <= 124 &&
-            y >= 21 &&
-            y <= 61)
-        {
-            if (
-                g_browser &&
-                g_browser->CanGoForward())
-            {
-                g_browser->GoForward();
-            }
-
-            return 0;
-        }
-
-
-        // ----------------------------------------------------
-        // RELOAD
-        // ----------------------------------------------------
-
-        if (
-            x >= 134 &&
-            x <= 178 &&
-            y >= 21 &&
-            y <= 61)
-        {
-            if (g_browser)
-            {
-                g_browser->Reload();
-            }
-
-            return 0;
-        }
-
-
-        break;
-    }
-
-
-    // ========================================================
-    // RESIZE
-    // ========================================================
-
+LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+  switch (msg) {
     case WM_SIZE:
-    {
-        int width =
-            LOWORD(lParam);
-
-        int height =
-            HIWORD(lParam);
-
-
-        // ----------------------------------------------------
-        // CEF
-        // ----------------------------------------------------
-
-        if (g_browser)
-        {
-            HWND browser_hwnd =
-                g_browser
-                ->GetHost()
-                ->GetWindowHandle();
-
-
-            if (browser_hwnd)
-            {
-                SetWindowPos(
-                    browser_hwnd,
-                    nullptr,
-                    0,
-                    82,
-                    width,
-                    height - 82,
-                    SWP_NOZORDER
-                );
-            }
-        }
-
-
-        // ----------------------------------------------------
-        // ADDRESS BAR
-        // ----------------------------------------------------
-
-        if (g_address_bar)
-        {
-            SetWindowPos(
-                g_address_bar,
-                nullptr,
-                215,
-                24,
-                width - 239,
-                36,
-                SWP_NOZORDER
-            );
-        }
-
-
-        InvalidateRect(
-            hwnd,
-            nullptr,
-            FALSE
-        );
-
-
-        return 0;
-    }
-
-
-    // ========================================================
-    // CLOSE
-    // ========================================================
-
+      ResizeBrowsers(hwnd);
+      return 0;
+    case WM_ERASEBKGND:
+      return 1;  // unikamy migotania - browsery i tak zakrywaja cale okno
     case WM_CLOSE:
-    {
-        // Najwa¿niejsza zmiana:
-        // nie czekamy na drugie klikniêcie X.
-
-        if (g_browser)
-        {
-            g_browser
-                ->GetHost()
-                ->CloseBrowser(true);
-        }
-
-
-        DestroyWindow(hwnd);
-
-        return 0;
-    }
-
-
-    // ========================================================
-    // DESTROY
-    // ========================================================
-
+      if (g_toolbar_browser) g_toolbar_browser->GetHost()->CloseBrowser(false);
+      if (g_content_browser) g_content_browser->GetHost()->CloseBrowser(false);
+      return 0;
     case WM_DESTROY:
-    {
-        PostQuitMessage(0);
-
-        return 0;
-    }
-    }
-
-
-    return DefWindowProc(
-        hwnd,
-        msg,
-        wParam,
-        lParam
-    );
+      CefQuitMessageLoop();
+      return 0;
+  }
+  return DefWindowProc(hwnd, msg, wp, lp);
 }
 
+std::wstring GetExeDir() {
+  wchar_t path[MAX_PATH];
+  GetModuleFileNameW(nullptr, path, MAX_PATH);
+  std::wstring full(path);
+  const size_t pos = full.find_last_of(L"\\/");
+  return full.substr(0, pos);
+}
 
-// ============================================================
-// WINMAIN
-// ============================================================
+std::string BuildToolbarFileUrl() {
+  const std::wstring dir = GetExeDir() + L"\\resources\\toolbar.html";
+  std::string url = "file:///";
+  for (wchar_t c : dir) {
+    url += (c == L'\\') ? '/' : static_cast<char>(c);
+  }
+  return url;
+}
 
-int APIENTRY wWinMain(
-    HINSTANCE hInstance,
-    HINSTANCE hPrevInstance,
-    wchar_t* lpCmdLine,
-    int nCmdShow)
-{
-    CefMainArgs main_args(
-        hInstance
-    );
+}  // namespace
 
+int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
+  // Ta wersja CEF nie eksportuje juz CefEnableHighDPISupport() (obsluga
+  // DPI przeniesiona jest do manifestu aplikacji / API systemowego) -
+  // uzywamy wiec bezposrednio Win32. SetProcessDPIAware daje "system DPI
+  // aware" (prostsze i zawsze dostepne od Visty), a nie pelne per-monitor
+  // v2 - do skeletonu wystarczy; mozna to podbic pozniej manifestem exe.
+  SetProcessDPIAware();
 
-    CefRefPtr<NizzApp> app =
-        new NizzApp();
+  void* sandbox_info = nullptr;
+#if defined(CEF_USE_SANDBOX)
+  CefScopedSandboxInfo scoped_sandbox;
+  sandbox_info = scoped_sandbox.sandbox_info();
+#endif
 
+  CefMainArgs main_args(hInstance);
+  CefRefPtr<GlassApp> app(new GlassApp);
 
-    // --------------------------------------------------------
-    // CEF SUBPROCESS
-    // --------------------------------------------------------
+  // Procesy potomne CEF (renderer, GPU, itd.) wchodza tu i wychodza od razu.
+  const int exit_code = CefExecuteProcess(main_args, app.get(), sandbox_info);
+  if (exit_code >= 0) {
+    return exit_code;
+  }
 
-    int exit_code =
-        CefExecuteProcess(
-            main_args,
-            app,
-            nullptr
-        );
+  CefSettings settings;
+#if !defined(CEF_USE_SANDBOX)
+  settings.no_sandbox = true;
+#endif
 
+  CefInitialize(main_args, settings, app.get(), sandbox_info);
 
-    if (exit_code >= 0)
-    {
-        return exit_code;
-    }
+  const wchar_t kClassName[] = L"GlassBrowserWindow";
+  WNDCLASSW wc = {};
+  wc.lpfnWndProc = WndProc;
+  wc.hInstance = hInstance;
+  wc.lpszClassName = kClassName;
+  wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+  wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+  RegisterClassW(&wc);
 
+  g_main_hwnd =
+      CreateWindowExW(0, kClassName, L"Glass Browser", WS_OVERLAPPEDWINDOW,
+                       CW_USEDEFAULT, CW_USEDEFAULT, 1280, 800, nullptr,
+                       nullptr, hInstance, nullptr);
 
-    // --------------------------------------------------------
-    // WINDOW CLASS
-    // --------------------------------------------------------
+  ShowWindow(g_main_hwnd, nCmdShow);
+  UpdateWindow(g_main_hwnd);
 
-    WNDCLASSEXW wc{};
+  RECT rect;
+  GetClientRect(g_main_hwnd, &rect);
+  const int width = rect.right - rect.left;
+  const int height = rect.bottom - rect.top;
 
-    wc.cbSize =
-        sizeof(WNDCLASSEXW);
+  // -- pasek (toolbar) - wlasny glassmorphism UI --
+  {
+    CefWindowInfo window_info;
+    window_info.SetAsChild(g_main_hwnd, CefRect(0, 0, width, kToolbarHeight));
 
-    wc.lpfnWndProc =
-        WindowProc;
+    CefBrowserSettings browser_settings;
 
-    wc.hInstance =
-        hInstance;
+    CefRefPtr<GlassClient> toolbar_client(new GlassClient(/*is_toolbar=*/true));
+    CefBrowserHost::CreateBrowser(window_info, toolbar_client,
+                                   BuildToolbarFileUrl(), browser_settings,
+                                   nullptr, nullptr);
+  }
 
-    wc.hCursor =
-        LoadCursor(
-            nullptr,
-            IDC_ARROW
-        );
+  // -- content - prawdziwe strony www --
+  {
+    CefWindowInfo window_info;
+    window_info.SetAsChild(
+        g_main_hwnd, CefRect(0, kToolbarHeight, width, height - kToolbarHeight));
 
+    CefBrowserSettings browser_settings;
 
-    wc.hbrBackground =
-        CreateSolidBrush(
-            NIZZ_COLOR_BACKGROUND
-        );
+    CefRefPtr<GlassClient> content_client(
+        new GlassClient(/*is_toolbar=*/false));
+    CefBrowserHost::CreateBrowser(window_info, content_client,
+                                   "https://www.google.com", browser_settings,
+                                   nullptr, nullptr);
+  }
 
-
-    wc.lpszClassName =
-        L"NizzBrowserWindow";
-
-
-    RegisterClassExW(
-        &wc
-    );
-
-
-    // --------------------------------------------------------
-    // MAIN WINDOW
-    // --------------------------------------------------------
-
-    g_main_window =
-        CreateWindowExW(
-            0,
-            L"NizzBrowserWindow",
-            L"Nizz Browser",
-            WS_OVERLAPPEDWINDOW,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            1200,
-            760,
-            nullptr,
-            nullptr,
-            hInstance,
-            nullptr
-        );
-
-
-    if (!g_main_window)
-    {
-        return 1;
-    }
-
-
-    ShowWindow(
-        g_main_window,
-        SW_SHOW
-    );
-
-
-    UpdateWindow(
-        g_main_window
-    );
-
-
-    // --------------------------------------------------------
-    // CEF SETTINGS
-    // --------------------------------------------------------
-
-    CefSettings settings;
-
-    settings.no_sandbox = true;
-
-
-    if (!CefInitialize(
-        main_args,
-        settings,
-        app,
-        nullptr))
-    {
-        return CefGetExitCode();
-    }
-
-
-    // --------------------------------------------------------
-    // MESSAGE LOOP
-    // --------------------------------------------------------
-
-    CefRunMessageLoop();
-
-
-    // --------------------------------------------------------
-    // SHUTDOWN
-    // --------------------------------------------------------
-
-    CefShutdown();
-
-
-    return 0;
+  CefRunMessageLoop();
+  CefShutdown();
+  return 0;
 }
