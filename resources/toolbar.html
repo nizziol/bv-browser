@@ -10,9 +10,9 @@
     --canvas-1: #fbfbf9;
     --canvas-2: #eeece7;
     --glass: rgba(255, 255, 255, 0.55);
-    --glass-strong: rgba(255, 255, 255, 0.8);
+    --glass-strong: rgba(255, 255, 255, 0.85);
     --glass-border: rgba(255, 255, 255, 0.9);
-    --hairline: rgba(60, 55, 45, 0.08);
+    --hairline: rgba(60, 55, 45, 0.09);
     --text: #211f1a;
     --text-dim: #7a7568;
     --shadow-soft: rgba(60, 50, 30, 0.14);
@@ -30,32 +30,195 @@
                  system-ui, sans-serif;
     -webkit-user-select: none;
     user-select: none;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
   }
 
-  /* Ambientowe tlo pod paskiem - cieple, perlowe rozjasnienia, ktore
-     backdrop-filter zamienia w miekkie "liquid glass" pod panelami. */
-  .stage {
-    position: relative;
+  /* ============================= PASEK KART ============================= */
+  .tabstrip {
+    height: 40px;
+    flex: none;
+    display: flex;
+    align-items: flex-end;
+    gap: 4px;
+    padding: 6px 8px 0 8px;
+    box-sizing: border-box;
+    background: linear-gradient(180deg, var(--canvas-1) 0%, #f4f2ee 100%);
+    border-bottom: 1px solid var(--hairline);
+    /* Puste tlo paska kart = obszar przeciagania okna. */
+    -webkit-app-region: drag;
+  }
+
+  .tabs {
+    display: flex;
+    align-items: flex-end;
+    gap: 4px;
+    flex: 1 1 auto;
+    min-width: 0;
     height: 100%;
+    -webkit-app-region: drag;
+  }
+
+  .tab {
+    -webkit-app-region: no-drag;
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 0 14px;
+    gap: 6px;
+    height: 33px;
+    max-width: 190px;
+    min-width: 96px;
+    padding: 0 8px 0 10px;
+    border-radius: 10px 10px 0 0;
+    background: transparent;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: background 150ms ease, color 150ms ease;
+    position: relative;
+  }
+  .tab:hover { background: var(--glass); }
+  .tab.active {
+    background: var(--glass-strong);
+    color: var(--text);
+    box-shadow: 0 -1px 0 var(--glass-border) inset,
+                0 2px 6px var(--shadow-soft);
+  }
+
+  .tab .favicon {
+    width: 14px;
+    height: 14px;
+    flex: none;
+    border-radius: 3px;
+    opacity: 0.75;
+  }
+
+  .tab .title {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: 12px;
+  }
+
+  .tab .close {
+    -webkit-app-region: no-drag;
+    flex: none;
+    width: 18px;
+    height: 18px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-dim);
+    opacity: 0;
+    transition: opacity 120ms ease, background 120ms ease, transform 150ms ease;
+  }
+  .tab:hover .close,
+  .tab.active .close { opacity: 0.7; }
+  .tab .close:hover {
+    opacity: 1;
+    background: rgba(0, 0, 0, 0.08);
+    transform: scale(1.15);
+  }
+  .tab .close svg { width: 10px; height: 10px; }
+
+  .tab-new {
+    -webkit-app-region: no-drag;
+    flex: none;
+    width: 30px;
+    height: 30px;
+    margin-bottom: 3px;
+    border-radius: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: background 150ms ease, transform 150ms ease, color 150ms ease;
+  }
+  .tab-new:hover {
+    background: var(--glass);
+    color: var(--text);
+    transform: scale(1.12);
+  }
+  .tab-new svg { width: 14px; height: 14px; }
+
+  .tab-dropdown {
+    -webkit-app-region: no-drag;
+    flex: none;
+    width: 28px;
+    height: 28px;
+    margin: 0 2px 3px 2px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: background 150ms ease, transform 150ms ease;
+  }
+  .tab-dropdown:hover {
+    background: var(--glass);
+    transform: scale(1.12);
+  }
+  .tab-dropdown svg { width: 12px; height: 12px; }
+
+  /* Przyciski okna - ta sama wysokosc co karty. */
+  .winctrls {
+    -webkit-app-region: no-drag;
+    flex: none;
+    display: flex;
+    align-items: center;
+    height: 100%;
+    padding-bottom: 3px;
+    gap: 2px;
+  }
+  .winbtn {
+    width: 34px;
+    height: 36px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: background 130ms ease, color 130ms ease, transform 130ms ease;
+  }
+  .winbtn svg { width: 11px; height: 11px; }
+  .winbtn:hover {
+    background: var(--glass);
+    color: var(--text);
+    transform: scale(1.1);
+  }
+  .winbtn.close:hover {
+    background: #e0564d;
+    color: #ffffff;
+  }
+
+  /* ============================= PASEK NAWIGACJI ============================= */
+  .stage {
+    position: relative;
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+    gap: 22px;
+    padding: 0 16px;
     box-sizing: border-box;
     background:
-      radial-gradient(90% 160% at 12% -30%, #ffffff 0%, transparent 55%),
-      radial-gradient(90% 160% at 88% 130%, #fff7ec 0%, transparent 55%),
+      radial-gradient(90% 220% at 12% -60%, #ffffff 0%, transparent 55%),
+      radial-gradient(90% 220% at 88% 160%, #fff7ec 0%, transparent 55%),
       linear-gradient(180deg, var(--canvas-1) 0%, var(--canvas-2) 100%);
   }
 
   .group {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 4px;
     background: var(--glass);
     border: 1px solid var(--glass-border);
-    border-radius: 16px;
-    padding: 6px;
+    border-radius: 14px;
+    padding: 5px;
     backdrop-filter: blur(24px) saturate(180%);
     -webkit-backdrop-filter: blur(24px) saturate(180%);
     box-shadow: 0 1px 0 rgba(255, 255, 255, 0.9) inset,
@@ -67,9 +230,9 @@
     appearance: none;
     border: none;
     background: transparent;
-    width: 36px;
-    height: 36px;
-    border-radius: 11px;
+    width: 32px;
+    height: 32px;
+    border-radius: 10px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -81,9 +244,8 @@
                 box-shadow 220ms ease;
   }
 
-  button.nav svg { width: 18px; height: 18px; }
+  button.nav svg { width: 16px; height: 16px; }
 
-  /* Hover: delikatne POWIEKSZENIE w miejscu, bez unoszenia do gory. */
   button.nav:hover {
     transform: scale(1.12);
     background: var(--glass-strong);
@@ -112,9 +274,9 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    height: 40px;
+    height: 36px;
     padding: 0 14px;
-    border-radius: 20px;
+    border-radius: 18px;
     background: var(--glass);
     border: 1px solid var(--glass-border);
     backdrop-filter: blur(24px) saturate(180%);
@@ -131,8 +293,8 @@
   }
 
   .addressbar svg {
-    width: 15px;
-    height: 15px;
+    width: 14px;
+    height: 14px;
     color: var(--text-dim);
     flex: none;
   }
@@ -143,7 +305,7 @@
     outline: none;
     background: transparent;
     color: var(--text);
-    font-size: 13.5px;
+    font-size: 13px;
     letter-spacing: 0.1px;
   }
 
@@ -160,6 +322,37 @@
 </style>
 </head>
 <body>
+
+  <!-- ============================= PASEK KART ============================= -->
+  <div class="tabstrip">
+    <div class="tabs" id="tabs"></div>
+
+    <div class="tab-new" id="tab-new" title="Nowa karta">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+           stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+    </div>
+    <div class="tab-dropdown" id="tab-dropdown" title="Lista kart">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+           stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+    </div>
+
+    <div class="winctrls">
+      <div class="winbtn minimize" id="win-minimize" title="Minimalizuj">
+        <svg viewBox="0 0 12 12"><rect x="1" y="5.5" width="10" height="1.4" fill="currentColor"/></svg>
+      </div>
+      <div class="winbtn maximize" id="win-maximize" title="Maksymalizuj">
+        <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2">
+          <rect x="1.5" y="1.5" width="9" height="9"/>
+        </svg>
+      </div>
+      <div class="winbtn close" id="win-close" title="Zamknij">
+        <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"
+             stroke-linecap="round"><path d="M1.5 1.5l9 9M10.5 1.5l-9 9"/></svg>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================= PASEK NAWIGACJI ============================= -->
   <div class="stage">
     <div class="group">
       <button class="nav" id="btn-back" title="Wstecz">
@@ -213,20 +406,144 @@
   </div>
 
 <script>
-  // Prosty wrapper na window.cefQuery, ktory C++ podpina po stronie
-  // "toolbar" browsera (patrz ToolbarQueryHandler w main.cpp).
+  // ------------------------- most JS <-> C++ -------------------------
   function sendAction(action) {
     if (window.cefQuery) {
-      window.cefQuery({
-        request: action,
-        onSuccess: function () {},
-        onFailure: function () {}
-      });
+      window.cefQuery({ request: action, onSuccess: function () {}, onFailure: function () {} });
     } else {
       console.log("[dev] akcja (brak CEF):", action);
     }
   }
 
+  // ------------------------- karty -------------------------
+  // Karta o id=1 istnieje juz po stronie C++ (tworzona w wWinMain),
+  // wiec musi tez istniec tutaj od startu - inaczej numeracja by sie rozjechala.
+  let tabs = [{ id: 1, title: "Nowa karta", url: "" }];
+  let activeId = 1;
+  let nextId = 2;
+
+  const tabsEl = document.getElementById("tabs");
+
+  function faviconSvg() {
+    return '<svg class="favicon" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+           'stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18' +
+           'M12 3a15 15 0 0 0 0 18"/></svg>';
+  }
+
+  function renderTabs() {
+    tabsEl.innerHTML = "";
+    tabs.forEach(function (tab) {
+      const el = document.createElement("div");
+      el.className = "tab" + (tab.id === activeId ? " active" : "");
+      el.dataset.tabId = tab.id;
+      el.innerHTML =
+        faviconSvg() +
+        '<span class="title"></span>' +
+        '<div class="close" title="Zamknij karte">' +
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" ' +
+        'stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></div>';
+      el.querySelector(".title").textContent = tab.title || "Nowa karta";
+
+      el.addEventListener("click", function (e) {
+        if (e.target.closest(".close")) return;
+        if (tab.id !== activeId) {
+          activeId = tab.id;
+          renderTabs();
+          sendAction("tab:activate:" + tab.id);
+        }
+      });
+      el.querySelector(".close").addEventListener("click", function (e) {
+        e.stopPropagation();
+        closeTab(tab.id);
+      });
+
+      tabsEl.appendChild(el);
+    });
+  }
+
+  function newTab() {
+    const id = nextId++;
+    tabs.push({ id: id, title: "Nowa karta", url: "" });
+    activeId = id;
+    renderTabs();
+    sendAction("tab:new:" + id);
+  }
+
+  function closeTab(id) {
+    if (tabs.length <= 1) {
+      // ostatnia karta - zamykamy cala aplikacje, nie ma czego przelaczac
+      sendAction("win:close");
+      return;
+    }
+    const idx = tabs.findIndex(function (t) { return t.id === id; });
+    if (idx === -1) return;
+
+    if (id === activeId) {
+      // wybierz sasiada PRZED wyslaniem zamkniecia, zeby przelaczenie
+      // bylo plynne (bez migniecia pustej tresci)
+      const neighbor = tabs[idx - 1] || tabs[idx + 1];
+      activeId = neighbor.id;
+      sendAction("tab:activate:" + neighbor.id);
+    }
+    tabs.splice(idx, 1);
+    renderTabs();
+    sendAction("tab:close:" + id);
+  }
+
+  // Wywolywane z C++ (GlassClient::OnTitleChange / OnAddressChange)
+  window.__setTabTitle = function (id, title) {
+    const tab = tabs.find(function (t) { return t.id === id; });
+    if (!tab) return;
+    tab.title = title;
+    const el = tabsEl.querySelector('.tab[data-tab-id="' + id + '"] .title');
+    if (el) el.textContent = title || "Nowa karta";
+  };
+  window.__setTabAddress = function (id, url) {
+    const tab = tabs.find(function (t) { return t.id === id; });
+    if (!tab) return;
+    tab.url = url;
+    if (id === activeId) {
+      document.getElementById("address-input").value = url;
+    }
+  };
+
+  document.getElementById("tab-new").addEventListener("click", newTab);
+  document.getElementById("tab-dropdown").addEventListener("click", function () {
+    // placeholder - pelna lista/menu kart do dodania pozniej
+    console.log("[dev] lista kart - jeszcze nie zaimplementowana");
+  });
+
+  renderTabs();
+
+  // ------------------------- przeciaganie okna -------------------------
+  // Klikniecie DOKLADNIE na pusty kontener (nie na jakas zakladke/przycisk
+  // w srodku - stad sprawdzenie e.target === e.currentTarget) odpala
+  // "przesun okno". To dziala niezaleznie od wersji CEF (patrz main.cpp).
+  function wireDrag(el) {
+    el.addEventListener("mousedown", function (e) {
+      if (e.target !== el || e.button !== 0) return;
+      sendAction("win:drag");
+    });
+    el.addEventListener("dblclick", function (e) {
+      if (e.target !== el) return;
+      sendAction("win:maximize");
+    });
+  }
+  wireDrag(document.querySelector(".tabstrip"));
+  wireDrag(tabsEl);
+
+  // ------------------------- przyciski okna -------------------------
+  document.getElementById("win-minimize").addEventListener("click", function () {
+    sendAction("win:minimize");
+  });
+  document.getElementById("win-maximize").addEventListener("click", function () {
+    sendAction("win:maximize");
+  });
+  document.getElementById("win-close").addEventListener("click", function () {
+    sendAction("win:close");
+  });
+
+  // ------------------------- nawigacja -------------------------
   document.getElementById("btn-back").addEventListener("click", function () {
     sendAction("action:back");
   });
